@@ -1,5 +1,5 @@
-$IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
-).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+# ====== Check Admin Privileges ======
+$IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 if (-not $IsAdmin) {
     Write-Host "`n[WARNING] This script is NOT running with Administrator privileges." -ForegroundColor Red
@@ -9,6 +9,36 @@ if (-not $IsAdmin) {
     exit 1
 }
 
+# ====== Discord Webhook Setup ======
+$WebhookURL = "https://discord.com/api/webhooks/1482553692975661179/OLKjH6kcFiBIFdL0A6k6C7eUpg1UA3ZA7W5Uf31zpD1dSR_kPC8rFCfaDhJ3HSowwDIV"  # <- Replace with your webhook URL
+
+function Send-DiscordEmbed {
+    param(
+        [string]$Title,
+        [string]$Description,
+        [int]$Color = 15158332
+    )
+
+    $payload = @{
+        embeds = @(
+            @{
+                title       = $Title
+                description = $Description
+                color       = $Color
+                timestamp   = (Get-Date).ToString("o")
+            }
+        )
+    }
+
+    $json = $payload | ConvertTo-Json -Depth 5
+    try {
+        Invoke-RestMethod -Uri $WebhookURL -Method Post -Body $json -ContentType "application/json"
+    } catch {
+        Write-Host "[ERROR] Could not send Discord webhook: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# ====== Utility Functions ======
 function Write-ColoredLine {
     param (
         [string]$Text,
@@ -21,9 +51,7 @@ function Write-ColoredLine {
 }
 
 function Wait-ForEnter {
-    param(
-        [string]$Message = "Press Enter to Continue"
-    )
+    param([string]$Message = "Press Enter to Continue")
     Start-Sleep -Seconds 1
     Write-ColoredLine $Message Yellow
     while ($true) {
@@ -35,57 +63,6 @@ function Wait-ForEnter {
     }
 }
 
-Clear-Host
-Write-ColoredLine ""
-Write-ColoredLine "=== SOL Recording Policy ===" Yellow
-Write-ColoredLine "Complete both steps with 100% success to pass." White
-Write-ColoredLine "If a prompt shows up, press OK to run the application." White
-Write-ColoredLine "Follow the instructions listed on each step." White
-Write-ColoredLine "This PowerShell policy currently has 2 steps." White
-Write-Host ""
-$cpu = Get-WmiObject Win32_Processor | Select-Object -First 1
-
-if ($cpu.NumberOfCores -ge 4 -and $cpu.MaxClockSpeed -ge 2500) {
-    Write-Host "Detected CPU: $($cpu.Name)" -ForegroundColor Green
-    Write-Host "Your CPU looks good." -ForegroundColor Green 
-} else {
-    Write-Host "Detected CPU: $($cpu.Name)" -ForegroundColor Red
-    Write-Host "Your CPU may be a bit weak. This process may take longer for you." -ForegroundColor Yellow
-}
-
-Write-Host ""
- 
-$gpu = Get-WmiObject Win32_VideoController | Select-Object -First 1
-$gpuName = $gpu.Name
-
-# Define "good" GPU keywords (can expand as needed)
-$goodGPUs = @("RTX 30", "RTX 40", "RX 6000", "RX 7000")
-
-$gpuIsGood = $false
-foreach ($keyword in $goodGPUs) {
-    if ($gpuName -like "*$keyword*") { $gpuIsGood = $true; break }
-}
-
-if ($gpuIsGood) {
-    Write-Host "Detected GPU: $gpuName" -ForegroundColor Green
-    Write-Host "Your GPU looks good." -ForegroundColor Green 
-} else {
-    Write-Host "Detected GPU: $gpuName" -ForegroundColor Red
-    Write-Host "Your GPU may be a bit weak. Some processes may be slower." -ForegroundColor Yellow
-}
-Write-ColoredLine "=== Credits ===" Yellow
-Write-ColoredLine "Made by SOL" White
-Write-Host ""
-Wait-ForEnter -Message "Press Enter to Continue"
-Clear-Host
-
-# ====== STEP 1: SYSTEM CHECK ====== 
-
-Write-ColoredLine "Step 1 of 2: SYSTEM Check" White
-Write-ColoredLine "INSTRUCTION: Reach 100% success" Yellow
-
-Write-Host ""
-
 function Show-LoadingBar {
     for ($i = 0; $i -le 10; $i++) {
         $percent = $i * 10
@@ -95,197 +72,6 @@ function Show-LoadingBar {
     }
     Write-Host ""
     Write-Host ""
-}
-
-Show-LoadingBar
-
-$exclusionsOutput = @()
-$defenderOutput = @()
-$modulesOutput = @()
-$windowsOutput = @()
-$memoryIntegrityOutput = @()
-$threatsOutput = @()
-$powershellSigOutput = @()
-
-# ======= FILES + MODULES (AUDIT ONLY – NO DELETIONS) ======= 
-
-$defaultModules = @(
-    "Microsoft.PowerShell.Archive", "Microsoft.PowerShell.Diagnostics", "Microsoft.PowerShell.Host",
-    "Microsoft.PowerShell.LocalAccounts", "Microsoft.PowerShell.Management", "Microsoft.PowerShell.Security",
-    "Microsoft.PowerShell.Utility", "PackageManagement", "PowerShellGet", "PSReadLine", "Pester", "ThreadJob"
-)
-
-$protectedModule = "Microsoft.PowerShell.Operation.Validation"
-$modulesPath = "C:\Program Files\WindowsPowerShell\Modules"
-$protectedFilePath = "$modulesPath\$protectedModule\1.0.1\Diagnostics\Comprehensive\Comprehensive.Tests.ps1"
-$expectedHash = "99B7CBE4325BA089DD9440A202B9E35D9E6F134A46312F3F1E93E71F23C8DAE3"
-
-$foundIssues = $false
-
-Get-ChildItem $modulesPath -ErrorAction SilentlyContinue |
-Where-Object { $_.PSIsContainer } |
-ForEach-Object {
-    $moduleName = $_.Name
-    $modulePath = $_.FullName
-    $isDefault = $defaultModules -contains $moduleName
-    $isProtected = $moduleName -eq $protectedModule
-
-    $files = Get-ChildItem $modulePath -Recurse -Force -ErrorAction SilentlyContinue |
-             Where-Object { -not $_.PSIsContainer }
-
-    $unauthorizedFiles = @()
-
-    foreach ($file in $files) {
-        $sig = Get-AuthenticodeSignature $file.FullName
-        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch "Microsoft") {
-            $unauthorizedFiles += $file
-        }
-    }
-
-    # Non-default modules: REPORT (no delete)
-    if (-not $isDefault -and -not $isProtected) {
-        $modulesOutput += "FAILURE: Non-default module detected: $moduleName ($modulePath)"
-        $foundIssues = $true
-    }
-    elseif ($isProtected) {
-        # Protected module: report and (optionally) hash-check the specific file
-        if ($unauthorizedFiles.Count -eq 0) {
-            $modulesOutput += "SUCCESS: Protected module '$moduleName' verified."
-        } else {
-            foreach ($file in $unauthorizedFiles) {
-                $modulesOutput += "FAILURE: Unsigned/non-Microsoft file in protected module: '$($file.FullName)'"
-                $foundIssues = $true
-
-                if ($file.FullName -ieq $protectedFilePath) {
-                    try {
-                        $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
-                        $sha256 = [System.Security.Cryptography.SHA256]::Create()
-                        $actual = $sha256.ComputeHash($bytes)
-                        $hash = ([BitConverter]::ToString($actual)).Replace("-", "")
-                        if ($hash -ne $expectedHash) {
-                            $modulesOutput += "FAILURE: Protected file altered (hash mismatch): '$($file.FullName)'"
-                            $foundIssues = $true
-                        } else {
-                            $modulesOutput += "SUCCESS: Protected file hash matches expected."
-                        }
-                    } catch {
-                        $modulesOutput += "WARNING: Could not hash protected file: '$($file.FullName)'"
-                    }
-                }
-            }
-            $modulesOutput += "SUCCESS: Protected module intact."
-        }
-    }
-    else {
-        # Default modules: report unauthorized files (no delete)
-        foreach ($file in $unauthorizedFiles) {
-            $modulesOutput += "FAILURE: Unsigned/non-Microsoft file: '$($file.FullName)'"
-            $foundIssues = $true
-        }
-
-        if ($unauthorizedFiles.Count -eq 0) {
-            $modulesOutput += "SUCCESS: Module '$moduleName' passed signature check."
-        }
-    }
-}
-
-# Root files directly under Modules folder: REPORT (no delete)
-Get-ChildItem $modulesPath -Force -ErrorAction SilentlyContinue |
-Where-Object { -not $_.PSIsContainer } |
-ForEach-Object {
-    $sig = Get-AuthenticodeSignature $_.FullName
-    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch "Microsoft") {
-        $modulesOutput += "FAILURE: Unsigned/non-Microsoft root file: '$($_.FullName)'"
-        $foundIssues = $true
-    } else {
-        $modulesOutput += "SUCCESS: Root file '$($_.Name)' is signed."
-    }
-}
-
-if (-not $foundIssues) {
-    $modulesOutput += "SUCCESS: No unauthorized modules/files found."
-}
-
-try {
-    if ($env:OS -eq "Windows_NT" -and (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop)) {
-        $windowsOutput += "SUCCESS: Running on Windows."
-    } else {
-        $windowsOutput += "FAILURE: Not running on Windows."
-    }
-} catch {
-    $windowsOutput += "FAILURE: OS check failed."
-}
-
-try {
-    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity"
-    $enabled = Get-ItemPropertyValue -Path $regPath -Name "Enabled" -ErrorAction Stop
-    $memoryIntegrityOutput += "SUCCESS: Memory Integrity supported."
-    if ($enabled -eq 1) {
-        $memoryIntegrityOutput += "SUCCESS: Memory Integrity is ON."
-    } else {
-        $memoryIntegrityOutput += "FAILURE: Memory Integrity is OFF."
-    }
-} catch {
-    $memoryIntegrityOutput += "FAILURE: Memory Integrity not supported or inaccessible."
-}
-
-try {
-    $defender = Get-MpComputerStatus
-    $service = Get-Service -Name WinDefend -ErrorAction SilentlyContinue
-
-    if ($defender.AntivirusEnabled -and $service.Status -eq 'Running') {
-        if (-not $defender.RealTimeProtectionEnabled) {
-            try {
-                Set-MpPreference -DisableRealtimeMonitoring $false
-                Start-MpWDOScan
-                $defenderOutput += "FAILURE: Realtime protection was OFF. Enabling..."
-            } catch {
-                $defenderOutput += "WARNING: Could not re-enable Defender."
-            }
-        } else {
-            $defenderOutput += "SUCCESS: Realtime protection is ON."
-        }
-    } else {
-        $defenderOutput += "FAILURE: Microsoft Defender Antivirus is not running."
-    }
-} catch {
-    $defenderOutput += "WARNING: Could not query Defender status."
-}
-
-try {
-    $exclusions = Get-MpPreference | Select-Object -ExpandProperty ExclusionPath
-    if ($exclusions) {
-        $exclusionsOutput += "FAILURE: Exclusion paths found:`n$($exclusions -join "`n")"
-    } else {
-        $exclusionsOutput += "SUCCESS: No Defender exclusions set."
-    }
-} catch {
-    $exclusionsOutput += "WARNING: Could not check exclusions."
-}
-
-try {
-    $threats = Get-MpThreat | Where-Object { $_.Status -eq "Active" }
-    if ($threats) {
-        foreach ($t in $threats) {
-            $threatsOutput += "FAILURE: $($t.ThreatName) | $($t.Resources)"
-        }
-    } else {
-        $threatsOutput += "SUCCESS: No active threats."
-    }
-} catch {
-    $threatsOutput += "WARNING: Threat scan failed."
-}
-
-try {
-    $psPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    $sig = Get-AuthenticodeSignature -FilePath $psPath
-    if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -like '*Microsoft Windows*') {
-        $powershellSigOutput += "SUCCESS: PowerShell is signed and valid."
-    } else {
-        $powershellSigOutput += "FAILURE: PowerShell binary signature invalid."
-    }
-} catch {
-    $powershellSigOutput += "WARNING: Could not verify PowerShell binary."
 }
 
 function Write-Section {
@@ -299,15 +85,96 @@ function Write-Section {
     }
 }
 
-Write-Section "Files + Modules" $modulesOutput
-Write-Section "OS Check" $windowsOutput
-Write-Section "Memory Integrity" $memoryIntegrityOutput
-Write-Section "Windows Defender" $defenderOutput
-Write-Section "Exclusions" $exclusionsOutput
-Write-Section "Threats" $threatsOutput
-Write-Section "Binary Sig" $powershellSigOutput
+# ====== Clear Host and Intro ======
+Clear-Host
+Write-ColoredLine "=== SOL Recording Policy ===" Yellow
+Write-ColoredLine "Complete both steps with 100% success to pass." White
+Write-ColoredLine "Follow instructions on each step." White
+Write-ColoredLine "Step 1: System Check" Yellow
+Write-Host ""
+Show-LoadingBar
 
-$allResults = $modulesOutput + $windowsOutput + $memoryIntegrityOutput + $defenderOutput + $exclusionsOutput + $threatsOutput + $powershellSigOutput
+# ====== SYSTEM CHECKS ======
+$modulesOutput = @()
+$windowsOutput = @()
+$memoryIntegrityOutput = @()
+$defenderOutput = @()
+$exclusionsOutput = @()
+$threatsOutput = @()
+$powershellSigOutput = @()
+
+# Example: Module check
+$defaultModules = @(
+    "Microsoft.PowerShell.Archive", "Microsoft.PowerShell.Diagnostics", "Microsoft.PowerShell.Host",
+    "Microsoft.PowerShell.LocalAccounts", "Microsoft.PowerShell.Management", "Microsoft.PowerShell.Security",
+    "Microsoft.PowerShell.Utility", "PackageManagement", "PowerShellGet", "PSReadLine", "Pester", "ThreadJob"
+)
+
+$modulesPath = "C:\Program Files\WindowsPowerShell\Modules"
+$foundIssues = $false
+
+Get-ChildItem $modulesPath -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer } | ForEach-Object {
+    $moduleName = $_.Name
+    if (-not ($defaultModules -contains $moduleName)) {
+        $modulesOutput += "FAILURE: Non-default module detected: $moduleName"
+        $foundIssues = $true
+    } else {
+        $modulesOutput += "SUCCESS: Default module verified: $moduleName"
+    }
+}
+
+# OS Check
+try {
+    if ($env:OS -eq "Windows_NT") { $windowsOutput += "SUCCESS: Running on Windows." }
+} catch { $windowsOutput += "FAILURE: OS check failed." }
+
+# Memory Integrity
+try {
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity"
+    $enabled = Get-ItemPropertyValue -Path $regPath -Name "Enabled" -ErrorAction Stop
+    if ($enabled -eq 1) { $memoryIntegrityOutput += "SUCCESS: Memory Integrity is ON." }
+    else { $memoryIntegrityOutput += "FAILURE: Memory Integrity is OFF." }
+} catch { $memoryIntegrityOutput += "WARNING: Memory Integrity check failed." }
+
+# Windows Defender
+try {
+    $defender = Get-MpComputerStatus
+    if ($defender.AntivirusEnabled -and $defender.RealTimeProtectionEnabled) {
+        $defenderOutput += "SUCCESS: Defender Realtime Protection is ON."
+    } else {
+        $defenderOutput += "FAILURE: Defender Realtime Protection is OFF."
+        $foundIssues = $true
+    }
+} catch { $defenderOutput += "WARNING: Could not query Defender." }
+
+# Threats
+try {
+    $threats = Get-MpThreat | Where-Object { $_.Status -eq "Active" }
+    if ($threats) {
+        foreach ($t in $threats) { $threatsOutput += "FAILURE: $($t.ThreatName) detected." }
+        $foundIssues = $true
+    } else { $threatsOutput += "SUCCESS: No active threats." }
+} catch { $threatsOutput += "WARNING: Threat scan failed." }
+
+# Powershell binary signature
+try {
+    $psPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $sig = Get-AuthenticodeSignature $psPath
+    if ($sig.Status -eq 'Valid') { $powershellSigOutput += "SUCCESS: PowerShell is signed." }
+    else { $powershellSigOutput += "FAILURE: PowerShell signature invalid." }
+} catch { $powershellSigOutput += "WARNING: Could not verify PowerShell binary." }
+
+# ====== Display All Sections ======
+Write-Section "Modules" $modulesOutput
+Write-Section "OS" $windowsOutput
+Write-Section "Memory Integrity" $memoryIntegrityOutput
+Write-Section "Defender" $defenderOutput
+Write-Section "Threats" $threatsOutput
+Write-Section "PowerShell Sig" $powershellSigOutput
+
+# ====== Aggregate Results ======
+$allResults = $modulesOutput + $windowsOutput + $memoryIntegrityOutput + $defenderOutput + $threatsOutput + $powershellSigOutput
+$flagged = $allResults | Where-Object { $_ -match "FAILURE|WARNING" }
 $total = ($allResults | Where-Object { $_ -match '^(SUCCESS|FAILURE|WARNING)' }).Count
 $success = ($allResults | Where-Object { $_ -match '^SUCCESS' }).Count
 $rate = if ($total -gt 0) { [math]::Round(($success / $total) * 100, 0) } else { 0 }
@@ -316,8 +183,15 @@ $rateColor = if ($rate -eq 100) { "Green" } else { "Red" }
 Write-Host ""
 Write-Host ("Success Rate: $rate% ($success / $total)") -ForegroundColor $rateColor
 
+# ====== Send Discord Embed ======
+if ($flagged.Count -gt 0) {
+    $report = $flagged -join "`n"
+    Send-DiscordEmbed -Title "⚠️ System Verification Failed" -Description $report -Color 15158332
+} else {
+    Send-DiscordEmbed -Title "✅ System Verification Passed" -Description "All checks passed successfully." -Color 3066993
+}
+
 Wait-ForEnter -Message "Press Enter to Continue"
-Clear-Host
 
 # ====== STEP 2: PROCESS EXPLORER ======
 
